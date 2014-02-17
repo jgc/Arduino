@@ -8,18 +8,21 @@ static void led (bool on) {
 void setup() {
   Serial.begin(9600);
   pinMode(LED, OUTPUT);
+  digitalWrite(LED, 1);
+  delay(5000);
   digitalWrite(LED, 0);
 }
 
 void loop() {
   c++;
-  for (int x = 0; x <= c; x++){
+  for (int x = 1; x <= c; x++){
     led(true);
     delay(1000);
     led(false);
-    delay(100);
+    delay(500);
   }
-  if (c = 10){
+  if (c == 10){
     c = 0;
   }
+  delay(3000);
 }
