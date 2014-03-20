@@ -46,7 +46,12 @@ int alarmPin = 9;
      if (numSensors>2) Serial.print(p->temp3);
      if (numSensors>3) Serial.print(" Sensor4: ");
      if (numSensors>3) Serial.print(p->temp4 / 100.);
-     if ((p->temp == 1) and (p->temp2 == 9) and (p->temp3 > 1)){
+     if (RF12_WANTS_ACK){
+        rf12_sendStart(RF12_ACK_REPLY, 0, 0);
+        Serial.println();
+        Serial.print("Acknowledgement sent ...");               
+     }
+     if ((p->temp == 1) && (p->temp2 == 9) && (p->temp3 > 1)){
        digitalWrite(alarmPin, HIGH);
        } else {
        digitalWrite(alarmPin, LOW);
