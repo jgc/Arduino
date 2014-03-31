@@ -5,31 +5,36 @@
 
 #include <JeeLib.h>
 
-ISR(WDT_vect) { Sleepy::watchdogEvent(); } // interrupt handler for JeeLabs Sleepy power saving
- 
+ISR(WDT_vect) {
+  Sleepy::watchdogEvent();  // interrupt handler for JeeLabs Sleepy power saving
+}
+
 #define myNodeID 3      // RF12 node ID in the range 1-30
 #define network 100      // RF12 Network group
 #define freq RF12_868MHZ // Frequency of RFM12B module
 #define pirdelay 60000       // Duration of sleep between measurements, in ms
+#define RADIO_SYNC_MODE 2
+#define ACK_TIME 5000
+#define NB_ATTEMPTS_ACK 3
 
 int alarmPin = 9;
 //########################################################################################################################
 //Data Structure to be sent, it is variable in size and we only send 2+n*2 bytes where n is the number of DS18B20 sensors attached
 //########################################################################################################################
- 
+
 typedef struct {
   int supplyV;
-  int motion; 
+  int motion;
   int code;
   int count;
 } Payload;
- 
+
 Payload temptx;
 
 int numSensors;
 int pirAttached = 0;
 Port pir (3);   // PIR sensor is connected to DIO3 (pin 2) of port 3
-uint8_t state; 
+uint8_t state;
 int reportcount = 0;
 int reportdelaymin = 1; // minutes
 int reportdelay = 60 * reportdelaymin;
@@ -39,20 +44,21 @@ int LEDR = 7;
 int LEDG = 17;
 int POW = 16;
 
-void blinkLed(){ 
-  if (ledV == 0){
+
+void blinkLed() {
+  if (ledV == 0) {
     digitalWrite(LEDR, LOW);
     digitalWrite(LEDG, LOW);
   }
-  if (ledV == 1){
+  if (ledV == 1) {
     digitalWrite(LEDR, HIGH);
     digitalWrite(LEDG, HIGH);
   }
-  if (ledV == 2){
+  if (ledV == 2) {
     digitalWrite(LEDR, HIGH);
     digitalWrite(LEDG, LOW);
   }
-  if (ledV == 3){
+  if (ledV == 3) {
     digitalWrite(LEDR, LOW);
     digitalWrite(LEDG, HIGH);
   }
@@ -62,7 +68,30 @@ void blinkLed(){
   ledV = 0;
 }
 
+static byte waitForAck() {
+	MilliTimer ackTimer;
+	while (!ackTimer.poll(ACK_TIME)){
+		if (rf12_recvDone() && rf12_crc == 0 && ((rf12_hdr & RF12_HDR_ACK) == 0) && ((rf12_hdr & RF12_HDR_CTL) == 128) ){
+			Serial.println("ACK Received");
+			Serial.print("Node ID:");Serial.println(rf12_hdr & RF12_HDR_MASK); 
+			// Serial.println("received something");
+			// Serial.println(rf12_hdr);
+			// Serial.print("RF12_HDR_DST=");Serial.println(rf12_hdr & RF12_HDR_DST);
+			// Serial.print("RF12_HDR_CTL=");Serial.println(rf12_hdr & RF12_HDR_CTL);
+			// Serial.print("RF12_HDR_ACK=");Serial.println(rf12_hdr & RF12_HDR_ACK);
+			// Serial.print("rf12_len=");Serial.println(rf12_len);
+		        delay(10);
+                 	return 1;
+		}
+	}
+	return 0;
+}
+
+
 void setup () {
+  Serial.begin(57600);
+  Serial.print("Sketch: jc_pir_led_radio_ack_1");
+  Serial.print("\n[pir_demo]");
   pinMode(POW, OUTPUT);
   digitalWrite(POW, HIGH);
   pinMode(LEDR, OUTPUT);
@@ -79,11 +108,11 @@ void setup () {
   delay(15000);
   ledV = 1;
   blinkLed();
-  rf12_initialize(myNodeID,freq,network); // Initialize RFM12 with settings defined above
+  rf12_initialize(myNodeID, freq, network); // Initialize RFM12 with settings defined above
   rf12_easyInit(5);
   rf12_control(0xC000);           // Adjust low battery voltage to 2.2V
   rf12_sleep(0);                  // Put the RFM12 to sleep
- 
+
   PRR = bit(PRTIM1);     // only keep timer 0 going
   ADCSRA &= ~ bit(ADEN); // Disable the ADC
   bitSet (PRR, PRADC);   // Power down ADC
@@ -91,83 +120,105 @@ void setup () {
   bitClear (ACSR, ACIE); // Disable comparitor interrupts
   bitClear (ACSR, ACD);  // Power down analogue comparitor
 
-  Serial.begin(57600);
-  Serial.print("Sketch: jc_pir_led_radio_ack_1");
-  Serial.print("\n[pir_demo]");
   pir.mode(INPUT);
   pir.mode2(INPUT);
   pir.digiWrite2(1); // pull-up
 
 }
-  
+
 void loop () {
-  if (pir.digiRead() != state && pirAttached == 0){
-      state = pir.digiRead();
-      Serial.print("\nPIR ");
-      Serial.print(state ? "on " : "off");
-      if (state == 1){
-        ledV = 2;
+  if (pir.digiRead() != state && pirAttached == 0) {
+    state = pir.digiRead();
+    Serial.print("\nPIR ");
+    Serial.print(state ? "on " : "off");
+    if (state == 1) {
+      ledV = 2;
+      blinkLed();
+      temptx.motion = 1;
+      temptx.code = 9;
+      temptx.count = pircount;
+      rfwrite();
+      delay(10);
+      pircount++;
+      if (pircount > 3) {
+        ledV = 1;
         blinkLed();
-        temptx.motion = 1;
-        temptx.code = 9;
-        temptx.count = pircount;
-        rfwriteack();
-        ledV = 3;
-        blinkLed();
-        pircount++;
-        if (pircount > 3){
-          ledV = 1;
-          blinkLed();
-          //delay(30000);
-          Sleepy::loseSomeTime(30000);
-          pircount = 0;
-        }
+        //delay(30000);
+        Sleepy::loseSomeTime(30000);
+        pircount = 0;
       }
+    }
   }
   reportcount++;
   Sleepy::loseSomeTime(1000);
   //delay(1000);
-  if (reportcount >= reportdelay){
-        temptx.motion = 0;
-        temptx.code = 0;
-        temptx.count = 0;
-        rfwriteack();
-        reportcount = 0;
-  }  
+  if (reportcount >= reportdelay) {
+    temptx.motion = 0;
+    temptx.code = 0;
+    temptx.count = 0;
+    rfwrite();
+    delay(10);
+    reportcount = 0;
+  }
 }
 
 //--------------------------------------------------------------------------------------------------
 // Send payload data via RF
 //--------------------------------------------------------------------------------------------------
- static void rfwriteack(){
-   rf12_sleep(-1);     //wake up RF module
-   vccRead();
-   rf12_easyPoll();
-   rf12_easySend(&temptx, 8); // two bytes for the battery reading, then 2*numSensors for the number of DS18B20s attached to Funky
+static void rfwriteack() {
+  rf12_sleep(-1);     //wake up RF module
+  vccRead();
+  rf12_easyPoll();
+  rf12_easySend(&temptx, 8); // two bytes for the battery reading, then 2*numSensors for the number of DS18B20s attached to Funky
 
-   rf12_sendWait(4);    //wait for RF to finish sending while in standby mode
-   rf12_sleep(0);    //put RF module to sleep
+  rf12_sendWait(4);    //wait for RF to finish sending while in standby mode
+  rf12_sleep(0);    //put RF module to sleep
 }
 
 //--------------------------------------------------------------------------------------------------
 // Send payload data via RF
 //--------------------------------------------------------------------------------------------------
- static void rfwrite(){
-   rf12_sleep(-1);     //wake up RF module
-   vccRead();
-   while (!rf12_canSend())
-   rf12_recvDone();
-   //rf12_sendStart(0, &temptx, numSensors*2 + 2); // two bytes for the battery reading, then 2*numSensors for the number of DS18B20s attached to Funky
-   rf12_sendStart(0, &temptx, 8); // two bytes for the battery reading, then 2*numSensors for the number of DS18B20s attached to Funky
-   //1 as 4th argument
-   rf12_sendWait(4);    //wait for RF to finish sending while in standby mode
-   rf12_sleep(0);    //put RF module to sleep
+static void rfwrite() {
+  rf12_sleep(-1);     //wake up RF module
+  vccRead();
+
+  int nAttempt = 1;
+  bool flag_ACK_received = false;
+  while (nAttempt < NB_ATTEMPTS_ACK && !flag_ACK_received ) {
+
+    while (!rf12_canSend())
+      rf12_recvDone();
+
+    //rf12_sendStart(RF12_HDR_ACK, payload, sizeof payload);
+    rf12_sendStart(RF12_HDR_ACK, &temptx, 8);
+    rf12_sendWait(4);
+
+    Serial.print("Attemps : "); Serial.println(nAttempt);
+    rf12_sendWait(4);
+    
+    if (waitForAck()) {
+      Serial.println("ACK received\n");
+      delay(10);
+      flag_ACK_received = true;
+      ledV = 3;
+      blinkLed();
+    } else {
+      Serial.println("ACK NOK received\n");
+      delay(10);
+      ledV = 2;
+      blinkLed();
+    }
+    rf12_sendWait(4);
+    nAttempt++;
+  }
+  rf12_sendWait(4);
+  rf12_sleep(0);    //put RF module to sleep
 }
- 
+
 //--------------------------------------------------------------------------------------------------
 // Reads current voltage
 //--------------------------------------------------------------------------------------------------
-void vccRead(){
+void vccRead() {
   bitClear(PRR, PRADC); // power up the ADC
   ADCSRA |= bit(ADEN); // enable the ADC
   Sleepy::loseSomeTime(10);
@@ -183,16 +234,16 @@ long vccRead2() {
   ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
   delay(2); // Wait for Vref to settle
   ADCSRA |= _BV(ADSC); // Convert
-  while (bit_is_set(ADCSRA,ADSC));
+  while (bit_is_set(ADCSRA, ADSC));
   result = ADCL;
-  result |= ADCH<<8;
+  result |= ADCH << 8;
   result = 1126400L / result; // Back-calculate AVcc in mV
   temptx.supplyV = result;
   //return result;
 }
 
 int freeRam () {
-  extern int __heap_start, *__brkval; 
-  int v; 
-  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval); 
+  extern int __heap_start, *__brkval;
+  int v;
+  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }

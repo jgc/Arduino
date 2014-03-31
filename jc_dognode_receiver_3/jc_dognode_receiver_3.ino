@@ -3,7 +3,7 @@
 #define myNodeID 31      // RF12 node ID in the range 1-30
 #define network 100      // RF12 Network group
 #define freq RF12_868MHZ // Frequency of RFM12B module
- 
+#define lineBreak "=============================="
 int debug = 1; // 1 = debug
 //########################################################################################################################
 //Data Structure to be received
@@ -26,11 +26,13 @@ int alarmc = 0;
  void setup(){
    Serial.begin(57600);
    delay(2000);
+   Serial.print("Sketch: ");
    Serial.println("jc_dognode_receiver_3");
    Serial.print("NodeID: ");
    Serial.println(myNodeID);
    Serial.print("Network: ");
    Serial.println(network);
+   Serial.println(lineBreak);
    rf12_initialize(myNodeID,freq,network);
    pinMode(alarmPin, OUTPUT);
    pinMode(ledPin, OUTPUT);
@@ -46,10 +48,12 @@ int alarmc = 0;
    digitalWrite(ledPin, LOW);
    
    Serial.println("Start up completed");  
+   Serial.println(lineBreak);
    delay(5000);     
  }
  
  void loop(){
+   // check if valid message received, if yes output
    if (rf12_recvDone() && rf12_crc == 0){
      int numSensors = rf12_len/2 - 1;
      const Payload* p = (const Payload*) rf12_data;
@@ -67,10 +71,14 @@ int alarmc = 0;
      if (numSensors>3) Serial.print(" Sensor4: ");
      if (numSensors>3) Serial.print(p->temp4 / 100.);
      Serial.println(); 
+     
+     // if message wants an acknowledgement send one
      if (RF12_WANTS_ACK){
         rf12_sendStart(RF12_ACK_REPLY, 0, 0);
         Serial.println("Acknowledgement sent ...");               
      }
+     
+     // if 
      if ((p->temp == 1) && (p->temp2 == 9) && (p->temp3 > 1)){
        digitalWrite(alarmPin, HIGH);
        digitalWrite(ledPin, HIGH);
@@ -82,6 +90,7 @@ int alarmc = 0;
      }
  }
  
+ // function to delay time based on debug mode
  void delaytime( int debug, int delaytype){
    if (debug == 0 && delaytype == 1){ 
      Serial.println("1ms alarm");  
