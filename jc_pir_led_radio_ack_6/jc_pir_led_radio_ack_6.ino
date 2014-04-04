@@ -2,14 +2,24 @@
 // Changes not uploaded
 // changed led delay from 2000 to 500 ms
 // report count corrected
+int debug1 = 0; // debug = 1
+int reportdelaymin = 5; // minutes
+int networkCode = 100;
+int eeAddress = 0;
+byte eeValue;
 
+long n = 32760;
+byte b[4];
+
+#define sketchV "Sketch: jc_pir_led_radio_ack_6.01"
+#define lineBreak "=============================="
 #include <JeeLib.h>
 #include <EEPROM.h>
 #include <OneWire.h> // http://www.pjrc.com/teensy/arduino_libraries/OneWire.zip
 #include <DallasTemperature.h> // http://download.milesburton.com/Arduino/MaximTemperature/DallasTemperature_LATEST.zip
 
-int eeAddr = 0;
-
+int node_id;
+  
 ISR(WDT_vect) {
   Sleepy::watchdogEvent();  // interrupt handler for JeeLabs Sleepy power saving
 }
@@ -41,6 +51,7 @@ typedef struct {
   int motion;
   int code;
   int count;
+  int netCode;
 } Payload;
 
 Payload temptx;
@@ -53,16 +64,15 @@ int pirAttached = 0;
 Port pir (3);   // PIR sensor is connected to DIO3 (pin 2) of port 3 - green lead on connector
 uint8_t state;
 int reportcount = 0;
-int reportdelaymin = 1; // minutes
 int reportdelay = 60 * reportdelaymin;
 int pircount = 0;
 int ledV = 0;
 int LEDR = 7; // blue lead on connector
 int LEDG = 17; // yellow lead on connector
 int POW = 16; // black lead - direct
-int RES = 4; // red lead on connector
+int RES = 14; // red lead on connector
 int nAttempt = 1;
-
+int valRES = 1;
 
 void blinkLed() {
   if (ledV == 0) {
@@ -91,28 +101,59 @@ static byte waitForAck() {
 	MilliTimer ackTimer;
 	while (!ackTimer.poll(ACK_TIME)){
 		if (rf12_recvDone() && rf12_crc == 0 && ((rf12_hdr & RF12_HDR_ACK) == 0) && ((rf12_hdr & RF12_HDR_CTL) == 128) ){
-			Serial.print(" ACK Received. ");
+			Serial.print(" ACK Data Received. ");
 			Serial.print("Node ID:");Serial.println(rf12_hdr & RF12_HDR_MASK); 
-			// Serial.println("received something");
-			// Serial.println(rf12_hdr);
-			// Serial.print("RF12_HDR_DST=");Serial.println(rf12_hdr & RF12_HDR_DST);
-			// Serial.print("RF12_HDR_CTL=");Serial.println(rf12_hdr & RF12_HDR_CTL);
-			// Serial.print("RF12_HDR_ACK=");Serial.println(rf12_hdr & RF12_HDR_ACK);
-			// Serial.print("rf12_len=");Serial.println(rf12_len);
-		        //delay(10);
-                 	return 1;
+			//Serial.print("received something. ");
+			//Serial.println(rf12_hdr);
+			//Serial.print("RF12_HDR_DST=");Serial.println(rf12_hdr & RF12_HDR_DST);
+			//Serial.print("RF12_HDR_CTL=");Serial.println(rf12_hdr & RF12_HDR_CTL);
+			//Serial.print("RF12_HDR_ACK=");Serial.println(rf12_hdr & RF12_HDR_ACK);
+			//Serial.print("rf12_len=");Serial.println(rf12_len);
+		         const Payload* p = (const Payload*) rf12_data;
+                         Serial.print(" ACK data: Node: ");
+                         node_id = (rf12_hdr & 0x1F); 
+                         Serial.print(node_id);
+                         Serial.print(" Voltage: ");
+                         Serial.print(p->supplyV / 100.);
+                         Serial.print(" Motion: ");
+                         Serial.print(p->motion);
+                         Serial.print(" Code: ");
+                         Serial.print(p->code);
+                         Serial.print(" count: ");
+                         Serial.print(p->count);
+                         Serial.print(" Netcode: ");
+                         Serial.print(p->netCode);
+                         Serial.println(); 
+                         // add code to avoid write if value is correct.
+                         if (p->code == 99){
+                           EEPROM.write(eeAddress, p->netCode);
+                           networkCode = p->netCode;
+                         }
+                         //rf12_sendWait(10);
+                         return 1;
 		}
 	}
+        //rf12_sendWait(10);
 	return 0;
 }
 
 
 void setup () {
   Serial.begin(57600);
-  Serial.println("Sketch: jc_pir_led_radio_ack_3");
+  Serial.println(sketchV);
   Serial.print("\n");
+  Serial.print("NodeID: ");
+  Serial.println(myNodeID);
+  Serial.print("Network: ");
+  Serial.println(network);
+  Serial.print("Saved network code: ");
+  eeValue = EEPROM.read(eeAddress);
+  Serial.println(eeValue, DEC);
+  networkCode = eeValue;
+  Serial.println(lineBreak);
   pinMode(POW, OUTPUT);
   digitalWrite(POW, HIGH);
+  pinMode(RES, INPUT);
   pinMode(LEDR, OUTPUT);
   digitalWrite(LEDR, HIGH);
   pinMode(LEDG, OUTPUT);
@@ -142,51 +183,110 @@ void setup () {
 }
 
 void loop () {
+  //valRES = digitalRead(RES);
+  //Serial.print("\nRES value: ");
+  //Serial.println(valRES);
+  if (valRES == 1){
+    //Serial.println("Requested code?");
+    //delay(100);
+    //valRES = digitalRead(RES);
+    if (valRES == 1){
+      digitalWrite(LEDR, HIGH);
+      temptx.supplyV = 0;
+      temptx.motion = 0;
+      temptx.code = 99;
+      temptx.count = 0;
+      temptx.netCode = networkCode;
+      Serial.println("Code requested ...");
+      //rf12_sendWait(10);
+      rfwrite();
+      digitalWrite(LEDR, LOW);
+      valRES = 0;
+    } 
+  }
+  
+  //delay(1200);
   
   if (pir.digiRead() != state && pirAttached == 0) {
+    //Serial.println("PIR loop ....");
     state = pir.digiRead();
-    //delay(10); //stop corruption of serial print
+    //delay(1000); //stop corruption of serial print
     //Serial.print("PIR ");
     //Serial.println(state ? "on " : "off");
     //delay(10); //stop corruption of serial print
     if (state == 1) {
       ledV = 2;
       blinkLed();
+      vccRead();
+      //delay(100);
       temptx.motion = 1;
       temptx.code = 9;
       temptx.count = pircount;
-      //delay(10);
+      temptx.netCode = networkCode;
+      rf12_sendWait(30);
       rfwrite();
-      //delay(10);
+      //rf12_sendWait(20);
       pircount++;
-      //delay(10); //stop corruption of serial print
+      //delay(2000);
       Serial.print("PIR ");
       Serial.println(state ? "on " : "off");
-      delay(2); //stop corruption of serial print
-      if (pircount > 3) {
+      //rf12_sendWait(30);
+      //delay(2000);
+      //int valRES = digitalRead(RES);
+      if (pircount > 3){
         //ledV = 1;
         //blinkLed();
         //delay(30000);
         Serial.println("Count > 3 so loose some time");
-        delay(5); //stop corruption of serial print
-        Sleepy::loseSomeTime(30000);
+        //delay(20); //stop corruption of serial print
+        if (debug1 == 0){
+          Serial.flush();
+          Sleepy::loseSomeTime(30000);
+        } else {
+          Serial.flush();
+          Sleepy::loseSomeTime(5000);       
+        }
         pircount = 0;
       }
+      //delay(100);
     }
   }
+
+//===========================
+  n = n + reportcount;
+  Serial.print("n: ");
+  Serial.print(n);
+  Serial.print(" == ");
+  IntegerToBytes(n, b);
+  for (int i=0; i<4; ++i) {
+   Serial.print((int )b[i]);
+   Serial.print(" ");
+  }
+  Serial.print("== d: ");
+  long d = bytesToInteger(b);
+  Serial.print(d);
+  Serial.print(" // Difference: ");
+  Serial.print(d - n);
+  Serial.println("\n");
+//===========================  
   reportcount++;
+  Serial.flush();
   Sleepy::loseSomeTime(1000);
-  //delay(1000);
+  //delay(100);
+ 
   if (reportcount >= reportdelay) {
-    Serial.println("\nRegular repot ");
+    Serial.println("\nRegular report ");
+    vccRead();
+    //delay(20);
     temptx.motion = 0;
     temptx.code = 0;
     temptx.count = 0;
-    //delay(10);
+    temptx.netCode = networkCode;
+    //rf12_sendWait(20);
     rfwrite();
-    //delay(10);
+    //rf12_sendWait(20);
     if (nAttempt == NB_ATTEMPTS_ACK){
-      Serial.println("????");
+      Serial.println("Error sending");
     }
     reportcount = 0;
   }
@@ -195,23 +295,12 @@ void loop () {
 //--------------------------------------------------------------------------------------------------
 // Send payload data via RF
 //--------------------------------------------------------------------------------------------------
-static void rfwriteack() {
-  rf12_sleep(-1);     //wake up RF module
-  vccRead();
-  rf12_easyPoll();
-  rf12_easySend(&temptx, 8); // two bytes for the battery reading, then 2*numSensors for the number of DS18B20s attached to Funky
-
-  rf12_sendWait(4);    //wait for RF to finish sending while in standby mode
-  rf12_sleep(0);    //put RF module to sleep
-}
-
-//--------------------------------------------------------------------------------------------------
-// Send payload data via RF
-//--------------------------------------------------------------------------------------------------
 static void rfwrite() {
+  //delay(1000);
+  Serial.println("\nStart rfsend ....");
   rf12_sleep(-1);     //wake up RF module
-  vccRead();
 
+  //rf12_sendWait(10);
   nAttempt = 1;
   bool flag_ACK_received = false;
   while (nAttempt < NB_ATTEMPTS_ACK && !flag_ACK_received ) {
@@ -220,31 +309,44 @@ static void rfwrite() {
       rf12_recvDone();
 
     //rf12_sendStart(RF12_HDR_ACK, payload, sizeof payload);
-    rf12_sendStart(RF12_HDR_ACK, &temptx, 8);
-    //rf12_sendWait(4);
-
-    Serial.print("Attemps : "); 
+    Serial.println("Attempting to send...");
+    Serial.print(" Voltage: ");
+    Serial.print(temptx.supplyV / 100.);
+    Serial.print(" Motion: ");
+    Serial.print(temptx.motion);
+    Serial.print(" Code: ");
+    Serial.print(temptx.code);
+    Serial.print(" count: ");
+    Serial.print(temptx.count);
+    Serial.print(" Netcode: ");
+    Serial.println(temptx.netCode);
+    //rf12_sendWait(20);    
+    rf12_sendStart(RF12_HDR_ACK, &temptx, 10);
+    //rf12_sendWait(20);
+    
+    Serial.print("Attempts : "); 
     Serial.print(nAttempt);
     //rf12_sendWait(4);
     
     if (waitForAck()) {
-      //Serial.println("ACK received\n");
-      //rf12_sendWait(4);
       flag_ACK_received = true;
       ledV = 3;
       blinkLed();
     } else {
-      Serial.println(" ACK NOK received");
+      Serial.println(" ACK NOT received");
       //delay(10);
       ledV = 1;
       blinkLed();
     }
-    //rf12_sendWait(4);
     nAttempt++;
   }
-  //rf12_sendWait(4);
+  // character corruption issue here???
+  //delay(2000);
+  //rf12_sendWait(2);
+  //
+  Serial.println("End rfsend");
   Serial.print("\n");
-  delay(2);
+  //delay(200);
   rf12_sleep(0);    //put RF module to sleep
 }
 
@@ -279,4 +381,21 @@ int freeRam () {
   extern int __heap_start, *__brkval;
   int v;
   return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+}
+
+// Arduino Code - Sends 4 bytes to C++ program on PC
+void IntegerToBytes(long val, byte b[4]) {
+  b[0] = (byte )((val >> 24) & 0xff);
+  b[1] = (byte )((val >> 16) & 0xff);
+  b[2] = (byte )((val >> 8) & 0xff);
+  b[3] = (byte )(val & 0xff);
+}
+
+long bytesToInteger(byte b[4]) {
+  long val = 0;
+  val = ((long )b[0]) << 24;
+  val |= ((long )b[1]) << 16;
+  val |= ((long )b[2]) << 8;
+  val |= b[3];
+  return val;
 }
